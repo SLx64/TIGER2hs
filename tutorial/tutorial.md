@@ -80,7 +80,7 @@ Also the OpenMM script `tigeromm` is changed from `remd/omm_impl_spe.py` to `rem
 
 ### Setting up a TIGER2hsPE simulation
 
-First of all, the molecular system with full solvation is built. For folding simulations of the entire phase space, the periodic box should be large enough to prevent significant periodic interaction self-interaction. The maximum possible sequence overlap should be less than 50%, so periodically interacting states do not dominate the conformational space. A rule of thumb assumes an extended length of 3.5 Å for each amino acid, so the cubic box side length can be approximated as:
+First of all, the molecular system with full solvation is built. For folding simulations of the entire phase space, the periodic box should be large enough to prevent significant periodic self-interaction. The maximum possible sequence overlap should be less than 50%, so periodically interacting states do not dominate the conformational space. A rule of thumb assumes an extended length of 3.5 Å for each amino acid, so the cubic box side length can be approximated as:
 
 ![equation](https://latex.codecogs.com/svg.image?\mathrm{PBC}_\mathrm{XYZ}&space;=&space;\mathrm{len}\left(\mathrm{seq}\right)&space;\cdot&space;3.5\,\AA&space;\cdot&space;\frac{2}{3})
 
@@ -93,7 +93,7 @@ For sampling the local conformations of a protein or for protein-protein and doc
     cd simulation
     cp remd/template.sh .
 
-Adapt `template.sh` to your system by replacing <INPUT> with your values. To determine the required number of water molecules for the hybrid solvent approach, a short conventional MD simulation is performed and the water structure is analyzed from the resulting trajectory. In case of e.g. a protein, it might be reasonable to start with a compact structure, either from prior relaxation MD or for example homology model. Although this is rather pointless for the actual sampling simulation that is intended, it allows a better determination of the water structure, than a non-equilibrated extended structure would, since those are usually rare in the actual thermodynamic ensemble. The same simulation settings must be used, as for the baseline replica during the intended sampling simulation. `Do NOT use an explicit water shell with multiple solutes.`
+Adapt `template.sh` to your system by replacing \<INPUT\> with your values. To determine the required number of water molecules for the hybrid solvent approach, a short conventional MD simulation is performed and the water structure is analyzed from the resulting trajectory. In case of e.g. a protein, it might be reasonable to start with a compact structure, either from prior relaxation MD or for example homology model. Although this is rather pointless for the actual sampling simulation that is intended, it allows a better determination of the water structure, than a non-equilibrated extended structure would, since those are usually rare in the actual thermodynamic ensemble. The same simulation settings must be used, as for the baseline replica during the intended sampling simulation. `Do NOT use an explicit water shell with multiple solutes.`
 
 Copy your topology and coordinates of the system into a seperate directory, along with the tools and `template_shell_MD.sh` template script and enter the directory:
 
@@ -191,7 +191,7 @@ While the simulation is running, the exchange attempts are logged in `output/job
 
 ### Tune the quenching phase
 
-To check whether the quenching phase length is suitably set, the replicas potential energies can be plotted from the individual NAMD log files. *<jobnum>* denotes the restart round and is **0** at the beginning: (requires xmgrace)
+To check whether the quenching phase length is suitably set, the replicas potential energies can be plotted from the individual NAMD log files. *\<jobnum\>* denotes the restart round and is **0** at the beginning: (requires xmgrace)
 
     ./tools/tigerplot <jobnum>
     
