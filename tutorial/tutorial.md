@@ -1,4 +1,4 @@
-## TIGER2hsPE application on your own system
+## TIGER2hs<sup>PE</sub> application on your own system
 
 Example systems for (AAQAA)3, HP7 and TrpCage are availabe. Additional practical information to run other molecular systems is the scope of this small tutorial. A minor working experience with NAMD and VMD should be present and also knowledge on building systems and topologies. All instruction were derived under a Linux environment.
 
@@ -69,7 +69,7 @@ Also the OpenMM script `tigeromm` is changed from `remd/omm_impl_spe.py` to `rem
 | tigerimpltop           | Topology file for reduced system |
 | tigerimplplatform      | OpenMM platform used for energy calculation [CPU, CUDA, OpenCL] |
 | ommpre                 | Command prefix for OpenMM script call |
-| ommsuff                | Command suffix for OpenMM script call. Usefull to pass CHARMM parameter files "-pf par1 par2 ..."  |
+| ommsuff                | Command suffix for OpenMM script call. Useful to pass CHARMM parameter files "-pf par1 par2 ..."  |
 | remdpressuregen        |  1=enabled; 0=disabled Enable the generation of temperature dependent counter pressures to the vapor pressure (NPT). If enabled, langevinpistontarget is controlled dynamically.|
 | num_runs               |  Number of exchange cycles to perform. |
 | min_runs               |  Number of minimization runs before sampling starts. |
