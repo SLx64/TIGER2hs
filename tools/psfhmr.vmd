@@ -1,0 +1,23 @@
+puts "Info) Requires VMD 1.9.4a48 or higher"
+
+#find psf top mol
+set files [lindex [molinfo top get filename] 0]
+set types [lindex [molinfo top get filetype] 0]
+for {set i 0} {$i < [llength $types]} {incr i} {
+    if {[lindex $types $i] == "psf"} {
+        set topol [lindex $files $i]
+        set typel [lindex $types $i]
+        break
+    }
+}
+
+#load psf
+package require psfgen
+resetpsf
+readpsf $topol
+
+#repart masses
+hmassrepart
+
+#write new psf
+writepsf "[file rootname $topol]_HmassR.psf"

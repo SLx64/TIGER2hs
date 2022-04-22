@@ -1,0 +1,523 @@
+# Supplementary information:
+#
+# Article:     Replica Based Protein Structure Sampling Methods III: 
+#              Parameter Sensitivity, Reproducibility and Efficacy of TIGER2hs
+# Authors:     Lukas Schulig, Norman Geist, Mihaela Delcea, Andreas Link, Martin Kulke
+# Institution: Institute of Pharmacy, University of Greifswald, Friedrich-Ludwig-Jahn-Str. 17, 17489 Greifswald
+#              Institute of Biochemistry, University of Greifswald, Felix-Hausdorff-Straße 4, 17487 Greifswald, Germany
+# Journal:     Journal of Chemical Theory and Computation
+#
+# -- TIGER2A-PE (pair exchange version)--
+#
+# Implementation of the TIGER2A - Temperature Intervals with Global Exchange of Replicas with solvent energy Averaging[1] algorithm
+# for the NAMD - NAnoscale Molecular Dynamics program[2]. The implementation is based on the original REMD script
+# shipped with the NAMD-2.11 source code (replica.namd). Works with multi-copy enabled NAMD builds of versions
+# 2.11 and above.
+#
+# [1] TIGER2 with solvent energy averaging (TIGER2A): An accelerated sampling method for large molecular systems
+#     with explicit representation of solvent.
+#     Li X, Snyder JA, Stuart SJ, Latour RA.
+# [2] James C. Phillips, Rosemary Braun, Wei Wang, James Gumbart, Emad Tajkhorshid, Elizabeth Villa,
+#     Christophe Chipot, Robert D. Skeel, Laxmikant Kale, and Klaus Schulten.
+#     Scalable molecular dynamics with NAMD.
+#     Journal of Computational Chemistry, 26:1781-1802, 2005
+#
+
+# AUTHORED: Norman Geist, Lukas Schulig 2021 (Language: TCL)
+# NOTE:     This implementation replaces the steps_per_run option by tigerheat, tigersample,
+#           tigerquench and tigeravg parameters and additionally features a minruns parameter implementing
+#           a minimization prior to REMD sampling. Also the parameter remdpressure [0|1] enables the computation
+#           of temperature dependant target pressures for the langevinpiston barostat. The parameter runs_per_frame
+#           has been removed and frames_per_restart was replaced by runs_per_restart. Length of the averaging
+#           phase can be determined from static potential energy noise in pure implicit solvation and
+#           a straight MD in explicit solvent with increasing average windows. Also
+#           add "energyfreq" as a devider of all phases mentioned above (usually 20 steps).
+#           The "sortreplicas" tools is no longer required. All resulting trajectory DCD files
+#           can just be concatenated, they all build the baseline ensemble.
+# INFO      Solute is now fixed during averaging using a dynamic RMSD colvar restraint. The options colvar_config_file, 
+#           colvar_indexgroup, colvar_force and colvar_col can be used to control the behavior. You need a index.ndx file 
+#           that addresses the atoms that need to be fixed. And the same atoms need to have set the O or B column (colvar_col)
+#           set to 1. Own colvars can still be included in colvar_config_file, where also the indexfile should be set.
+#           the averaging phase are discarded.
+
+after 5000 replicaBarrier; #prevents segfaulting if parallel startup is really unsynchronous
+
+### get replica info ########
+set nr [numReplicas]
+if { $num_replicas != $nr } {
+    error "restart with wrong number of replicas"
+}
+set replica_id [myReplica]
+#############################
+
+########## INIT TIGER2A ##############################
+if {[info exists restart_root]} { #restart
+    puts "Info: TIGER2A - RESTARTING FROM PREVIOUS JOB"
+    set restart_root [format $restart_root $replica_id]
+    source $restart_root.$replica_id.tcl
+} else {
+    puts "Info: TIGER2A - INITIALIZING NEW JOB"
+    set i_job  0
+    set i_run  0
+    set i_step 0
+    if {[info exists first_timestep]} {
+        set i_step $first_timestep
+    }
+    for {set i 0} {$i < $num_replicas} {incr i} {
+        set replica(TempByRank.$i) $i
+        set replica(RankByTemp.$i) $i
+    }
+}
+#enable target pressure computation based on ANTOINE
+set remdpressure 0
+if {[info exists remdpressuregen]} {
+    if {$remdpressuregen == 1} {
+        set remdpressure 1
+    }
+}
+#####################################################
+
+#PROCS ##############################################
+proc save_callback {labels values} {
+    global saved_labels saved_values
+    set saved_labels $labels
+    set saved_values $values
+}
+callback save_callback
+proc save_array {} {
+    global saved_labels saved_values saved_array
+    foreach label $saved_labels value $saved_values {
+        set saved_array($label) $value
+    }
+}
+
+proc rselect {num_reps exclude_ids} {
+    set svar [expr int($num_reps * rand())]
+    while {[lsearch -integer -exact $exclude_ids $svar] > -1} {
+        set svar [expr int($num_reps * rand())]
+    }
+    return $svar
+}
+
+proc replica_temp { i } {
+    global num_replicas min_temp max_temp
+    return [format "%.2f" [expr ($min_temp * \
+            exp( log(1.0*$max_temp/$min_temp)*(1.0*$i/($num_replicas-1)) ) )]]
+}
+
+proc timer_read {} {
+    set clocksource "/proc/uptime"
+    if {[file exists $clocksource]} {
+        set fp [open $clocksource r]
+        set raw [read $fp]
+        close $fp
+        
+        return [lindex $raw 0]
+    } else {
+        puts "Warn: TIMING INFORMATION ONLY AVAILABLE TO UNIX BASED SYSTEMS ($clocksource)"
+        return 0
+    }
+}
+
+proc timer_init {} {
+    global TIMERSTAMPS
+    array set TIMERSTAMPS {}
+}
+
+proc timer_start {name} {
+    global TIMERSTAMPS
+    set TIMERSTAMPS($name) [timer_read]
+}
+
+proc timer_now {name} {
+    global TIMERSTAMPS
+    if {[info exists TIMERSTAMPS($name)]} {
+        set lstamp [expr [timer_read]-$TIMERSTAMPS($name)]
+        set TIMERSTAMPS($name.val) $lstamp
+        return $lstamp
+    } else {
+        puts "Warn: TIMER $name NOT RUNNING"
+        return 0
+    }
+}
+
+proc timer_stop {name} {
+    global TIMERSTAMPS
+    if {[info exists TIMERSTAMPS($name)]} {
+        set lstamp [expr [timer_read]-$TIMERSTAMPS($name)]
+        set TIMERSTAMPS($name.val) $lstamp
+        set TIMERSTAMPS($name) 0
+        return $lstamp
+    } else {
+        puts "Warn: TIMER $name NOT STARTED"
+        return 1
+    }
+}
+
+proc timer_get {name} {
+    global TIMERSTAMPS
+    if {[info exists TIMERSTAMPS($name.val)]} {
+        return $TIMERSTAMPS($name.val)
+    } else {
+        puts "Warn: TIMER $name NOT STOPPED"
+        return 1
+    }
+}
+
+proc s2human {secs {prec 2}} {
+    set dur ""
+    set factors {1. 60. 60. 24.}
+    set captions {"s" "m" "h" "d"}
+    set values 0
+    lset values 0 $secs
+    
+    for {set i 1} {$i<[llength $factors]} {incr i} {
+        lappend values [expr int([lindex $values [expr $i-1]]/[lindex $factors $i])]
+        if {[lindex $values $i] > 0} {
+            lset values [expr $i-1] [expr [lindex $values [expr $i-1]] - [lindex $values $i]*[lindex $factors $i]]
+        } else {
+            set i [llength $factors]
+        }
+    }
+    for {set i 0} {$i<[llength $values]} {incr i} {
+        if {[lindex $values $i] > 0} {
+            set tprec [expr $i > 0 ? 0 : $prec]
+            set dur [concat [format %.${tprec}f [lindex $values $i]][lindex $captions $i] $dur]
+        }
+    }
+    return $dur
+}
+
+proc colvar_forceOn {} {
+    global output_root replica_id colvar_config_file colvar_indexgroup colvar_force colvar_col
+    
+    #save current coordinates
+    output [format "$output_root.colvar.$replica_id" ""]
+	set positionsfile [format "$output_root.colvar.$replica_id.coor" ""]
+	
+	cv reset
+	cv configfile $colvar_config_file
+	cv config "colvar {
+					name t2a_colvar
+					rmsd {
+						atoms {
+							indexGroup $colvar_indexgroup
+							centerReference off
+							rotateReference off
+						}
+						refPositionsFile $positionsfile
+						refPositionsCol  $colvar_col
+					}
+				}"
+				
+	cv config "harmonic {
+					name t2a_colvar_force
+					colvars t2a_colvar
+					centers 0
+					forceConstant $colvar_force
+				}"
+			
+    puts "Info: TIGER2A - FIXED ATOMS ENABLED"
+}
+
+proc colvar_forceOff {} {
+    global  colvar_config_file
+
+    cv reset
+	cv configfile $colvar_config_file
+		
+	puts "Info: TIGER2A - FIXED ATOMS DISABLED"
+}
+
+proc colvar_forceEnergy {} {
+    set bias [cv bias "t2a_colvar_force" energy]
+    puts "Info: TIGER2A - FIXED ATOMS TOTAL ENERGY $bias"
+    return $bias
+}
+#####################################################
+
+##### SIMULATION SETUP ##############################
+set job_output_root "$output_root.job$i_job"
+set replica(temperature) [replica_temp $replica(RankByTemp.$replica_id)]
+
+set history_file [open [format "$job_output_root.$replica_id.history" $replica_id] "w"]
+fconfigure $history_file -buffering line
+
+set incr_step [expr $tigerheat + $tigersample + $tigerquench]
+
+binaryoutput    no
+firsttimestep 	$i_step
+outputEnergies  $energyfreq
+outputTiming    [expr $energyfreq*10]
+seed 	   	[expr int(0*srand(int(100000*rand()) + 100*$replica_id) + 100000*rand())]
+outputname 	[format $job_output_root.$replica_id $replica_id]
+
+if {$i_run} { #restart
+    coordinates $restart_root.$replica_id.coor
+    velocities $restart_root.$replica_id.vel
+    extendedSystem $restart_root.$replica_id.xsc
+} else {
+    coordinates $initial_pdb_file
+    temperature $replica(temperature)
+}
+
+source $namd_config_file
+
+#enable colvars used to fix atoms
+colvars         on
+colvarsConfig   $colvar_config_file
+puts "Info: TIGER2A - ENABLED COLVAR BASED TOGGABLE FIXED ATOMS"
+#####################################################
+
+### INITIALIZE ON DEMAND FRAME OUTPUT ###
+puts "Info: TIGER2A - INITIALIZING ON-DEMAND COORDINATES"
+#just needed for "run"
+if {$remdpressure} {
+    langevinpistontarget 1
+}
+langevintemp $replica(temperature)
+langevinpistontemp $replica(temperature)
+dcdfreq $incr_step; #just != 0 to init dcd output
+minimize 0
+dcdfreq 0
+
+proc dcdframe {} {
+    puts "Info: TIGER2A - WRITING COORDINATES"
+    checkpointStore dcdframe [myReplica]
+    set steps [stepspercycle]
+    set curr  [firsttimestep]
+    dcdfreq  $steps
+    run $steps
+    dcdfreq 0
+    firsttimestep $curr
+    checkpointLoad dcdframe [myReplica]
+}
+#########################################
+
+### PERFORM INITIAL MINIMIZATION ###
+if {[info exists minruns]} {
+    if {$minruns > 0 && $i_run == 0} {
+        puts "Info: TIGER2A - PERFORMING MINIMIZATION"
+        if {$remdpressure} {
+            langevinpistontarget 1
+        }
+        langevintemp $replica(temperature)
+        langevinpistontemp $replica(temperature)
+        minimize [expr $incr_step*$minruns]
+        firsttimestep 0
+    }
+}
+######################################
+
+#enable continuous heating modification
+set conheat 0
+if {[info exists tigerconheat] && $tigerconheat} {
+    puts "Info: TIGER2A - ENABLED CONTINUOUS HEATING MODIFICATION"
+    set conheat 1
+}
+
+#########################################
+puts "Info: TIGER2A - ENTERING MAIN LOOP"
+timer_init
+while {$i_run < $num_runs} {
+    timer_start "cycle"
+    langevinTemp $replica(temperature)
+    langevinPistonTemp $replica(temperature)
+    if {$remdpressure} {
+        langevinpistontarget [expr 3*0.00133*pow(10,8.14019-(1810.94/(244.485+($replica(temperature)-273.15))))]
+    }
+    
+    puts "Info: TIGER2A - SAMPLING RUN $i_run"
+    run [expr $tigerheat+$tigersample]
+    
+    if {$conheat} {
+        checkpointStore conheat [myReplica]
+        set ch_old_temp $replica(temperature)
+    }
+    
+    langevinTemp $min_temp
+    langevinPistonTemp $min_temp
+    if {$remdpressure} {
+        langevinpistontarget [expr 3*0.00133*pow(10,8.14019-(1810.94/(244.485+($min_temp-273.15))))]
+    }
+    rescalevels [expr sqrt(1.0*$min_temp/$replica(temperature))]
+    puts "Info: TIGER2A - QUENCHING RUN $i_run"
+    run $tigerquench
+    
+    #average potential energy
+    timer_start "avg"
+    if {$tigeravg > 0} {
+        puts "Info: TIGER2A - AVERAGING RUN $i_run"
+        checkpointStore avg [myReplica]
+        colvar_forceOn
+        set avgsamples  [expr $tigeravg/$energyfreq];
+        set avgsteps    [expr $tigeravg/$avgsamples];
+        set POTENTIAL  0
+        set TEMP       0
+        for {set k 0} {$k < $avgsamples} {incr k} {
+            run $avgsteps
+            save_array
+            set POTENTIAL  [expr $POTENTIAL +  ($saved_array(TOTAL) - ($saved_array(KINETIC)+[colvar_forceEnergy]))]
+            set TEMP       [expr $TEMP      +  $saved_array(TEMP)]
+        }
+        set POTENTIAL  [expr $POTENTIAL  / $avgsamples]
+        set TEMP       [expr $TEMP       / $avgsamples]
+        colvar_forceOff
+        checkpointLoad avg [myReplica]
+    } else {
+        save_array
+        set POTENTIAL  [expr ($saved_array(TOTAL) - $saved_array(KINETIC))]
+        set TEMP       [expr $saved_array(TEMP)]
+    }
+    timer_stop "avg"
+
+    #save history
+    incr i_step $incr_step
+    puts $history_file "$i_step $replica(RankByTemp.$replica_id) $replica(temperature) $TEMP $POTENTIAL"
+    
+    #let base temp replica do swap decision
+    set bid $replica(TempByRank.0)
+    if {$replica_id != $bid} {
+        
+        #send potential energy
+        replicaSend $POTENTIAL $bid
+        
+        #get new replica->temperature mapping
+        array unset replica
+        array set replica [replicaRecv $bid]
+        
+    } else {
+        # let base temp replica write a frame prior to exchange
+        dcdframe
+
+        #collect potential energies
+        array unset RankByPot
+        array unset PotByRank
+        array set RankByPot {}
+        array set PotByRank {}
+        set RankByPot($replica_id) $POTENTIAL
+        set PotByRank($POTENTIAL) $replica_id
+        for {set i 0} {$i < $num_replicas} {incr i} {
+            if {$i != $replica_id} {
+                set pot [replicaRecv $i]
+                while {[info exists PotByRank($pot)]} {
+                    puts "Warn: TIGER2Hs2 - ENERGY DUPLICATES RUN $i_run"
+                    set pot [expr $pot + (rand()*1e-10)]
+                }
+                set RankByPot($i) $pot
+                set PotByRank($pot) $i
+            }
+        }
+        
+        #perform multiple pairwise random exchanges without a run inbetween, until all replicas were asked ;)
+        set rused {}
+        while {[llength $rused] < $num_replicas} {
+            #perform check between two random replicas
+            set tbid [rselect $num_replicas $rused]
+            set rid [rselect $num_replicas $rused]
+            set temp  [replica_temp $replica(RankByTemp.$tbid)]
+            set temp2 [replica_temp $replica(RankByTemp.$rid)]
+            
+            #exclude temp > temp2
+            if {$temp >= $temp2} {
+                continue
+            }
+            
+            lappend rused $tbid $rid
+            
+            set BOLTZMAN [expr 0.001987191]
+            set dbeta [expr (1.0/($min_temp * $BOLTZMAN))]
+            set pot $RankByPot($tbid)
+            set pot2 $RankByPot($rid)
+            set delta [expr $dbeta * ($pot2 - $pot)]
+            set doswap [expr $delta < 0. || exp(-1. * $delta) > rand()]
+            
+            #register swaps & samples to write
+            if { ! $doswap } {             
+                puts stderr "EXCHANGE_REJECT $tbid ($temp) $rid ($temp2) RUN $i_run"
+            } else {               
+                puts stderr "EXCHANGE_ACCEPT $tbid ($temp) $rid ($temp2) RUN $i_run"
+                
+                set old_temp  $replica(RankByTemp.$tbid)
+                set old_temp2 $replica(RankByTemp.$rid)
+                
+                set replica(TempByRank.$old_temp) $rid
+                set replica(RankByTemp.$rid) $old_temp
+                
+                set replica(TempByRank.$old_temp2) $tbid
+                set replica(RankByTemp.$tbid) $old_temp2
+            }
+        }
+        
+        #broadcast new information to other replicas
+        for {set i 0} {$i < $num_replicas} {incr i} {
+            if {$i != $replica_id} {
+                replicaSend [array get replica] $i
+            }
+        }
+    }
+    #--------------------------------------------------------------
+    
+    #update own temperature
+    set replica(temperature) [replica_temp $replica(RankByTemp.$replica_id)]
+    
+    if {$conheat} {
+        if {$ch_old_temp > $replica(temperature)} {
+            if {[expr $replica(temperature)-$min_temp] > [expr abs($replica(temperature)-$ch_old_temp)]} {
+                checkpointLoad conheat [myReplica]
+                rescalevels [expr sqrt(1.0*$replica(temperature)/$ch_old_temp)]
+            } else {
+                rescalevels [expr sqrt(1.0*$replica(temperature)/$min_temp)]
+            }
+        } else {
+            checkpointLoad conheat [myReplica]
+            rescalevels [expr sqrt(1.0*$replica(temperature)/$ch_old_temp)]
+        }
+    } else {
+        rescalevels [expr sqrt(1.0*$replica(temperature)/$min_temp)]
+    }
+    
+    #timings
+    set tcycle [s2human [timer_stop "cycle" ]]
+    set tavg   [s2human [timer_get   "avg"  ]]
+    
+    puts "Info: TIGER2A - COMPLETED RUN $i_run IN $tcycle AVERAGING TOOK $tavg"
+    incr i_run
+    
+    #write restart information
+    if { $i_run % $runs_per_restart == 0 ||
+        $i_run == $num_runs } {  # restart
+        puts "Info: TIGER2A - WRITING RESTART INFORMATION AT RUN $i_run"
+        set restart_root "$job_output_root.restart$i_run"
+        output [format $restart_root.$replica_id $replica_id]
+        set rfile [open [format "$restart_root.$replica_id.tcl" $replica_id] "w"]
+        puts $rfile [list array set replica [array get replica]]
+        close $rfile
+        replicaBarrier
+        if { $replica_id == 0 } {
+            set rfile [open [format "$restart_root.tcl" ""] "w"]
+            puts $rfile [list set i_job [expr $i_job + 1]]
+            puts $rfile [list set i_run $i_run]
+            puts $rfile [list set i_step $i_step]
+            puts $rfile [list set restart_root $restart_root]
+            close $rfile
+            if [info exists old_restart_root] {
+                set oldroot [format $old_restart_root ""]
+                file delete $oldroot.tcl
+            }
+        }
+        replicaBarrier
+        if [info exists old_restart_root] {
+            set oldroot [format $old_restart_root $replica_id]
+            file delete $oldroot.$replica_id.tcl
+            file delete $oldroot.$replica_id.coor
+            file delete $oldroot.$replica_id.vel
+            file delete $oldroot.$replica_id.xsc
+        }
+        set old_restart_root $restart_root
+    }
+}
+
+replicaBarrier
+
+

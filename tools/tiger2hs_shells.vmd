@@ -1,0 +1,76 @@
+# Norman Geist 2018
+# - Use in VMD -
+# -----------------------------------------------------------------------------
+# Select the size of the watershell for TIGER2hs by a short
+# solvated MD of the desired solute. It might be reasoable to
+# not use a fully extended strand, but a compact structure.
+# Then the solvent shells around the solute can be evaluated by 
+# distance histograms and the cumulative sum of solvent molecules is appreciated.
+# -----------------------------------------------------------------------------
+
+puts "Input) Give solute selection(mol=top)? (e.g. protein)"
+gets stdin solutesel
+puts "Input) Give solvent selection(mol=top)? (e.g. water and oxygen)"
+gets stdin solventsel
+puts "Input) Histogram spacing? (e.g. 0.1 Angstrom)"
+gets stdin spacing
+puts "Input) Max dist to solute (runtime tuning)? (e.g. 10 Angstrom)"
+gets stdin maxdist
+puts "Input) Frame stride (e.g. 100)"
+gets stdin stride
+puts "Input) Output name"
+gets stdin outname
+
+set frames [molinfo top get numframes]
+
+puts "Info) Ensuring correct solute embedding in solvent..."
+for {set i 0} {$i < $frames} {incr i $stride} {
+  animate goto $i
+  pbc wrap -now -compound res -center com -centersel $solutesel -sel "same fragment as ($solventsel)"
+}
+puts "Info) ...done"
+
+puts "Info) Performing analysis ..."
+array unset data
+array set data {}
+set avg 0
+for {set i 0} {$i < $frames} {incr i $stride} {
+  puts "Info) Frame $i / $frames"
+  animate goto $i
+  set shell 0
+  while {$shell*$spacing <= $maxdist} {
+	set sel1 "(all pbwithin [expr  $shell   *$spacing] of ($solutesel)) and $solventsel"
+	set sel2 "(all pbwithin [expr ($shell+1)*$spacing] of ($solutesel)) and $solventsel"
+	set sel [atomselect top "($sel2) and not ($sel1)"]
+	
+	incr data($shell) [$sel num]
+	incr shell
+	
+	$sel delete
+  }
+  incr avg
+}
+puts "Info) ...done"
+
+#write output
+puts -nonewline "Info) Writing output ..."
+set out [open $outname w]
+puts $out "#dist #count/spacing #cumulative_sum"
+set shells [lsort -integer -increasing [array names data]]
+set cum 0
+foreach shell $shells {
+  set c [expr 1. * $data($shell) /($avg*$spacing)]
+  set s [expr $shell*$spacing]
+  set cum [expr 1. * $cum + ($spacing*$c)]
+  puts $out "$s $c $cum"
+}
+close $out
+puts " done!"
+
+puts "-------------------------------------------------------------------------------------------------------"
+puts "Info) Now plot (e.g. \"xmgrace -nxy $outname\") and read amount of solvent atoms in shells from sum!"
+puts "Info) In case of water oxygens, this is the number of solvent molecules already,"
+puts "Info) otherwise divide by the number of selected solvent atoms per solvent molecule"
+puts "Info) (e.g. 3 when solvent selection was \"water\"!"
+puts "-------------------------------------------------------------------------------------------------------"
+

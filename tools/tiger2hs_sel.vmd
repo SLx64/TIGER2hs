@@ -1,0 +1,78 @@
+# Norman Geist 2018
+# - Use in VMD -
+# -----------------------------------------------------------------------------
+# You should have a topology loaded so the residue information is reliable
+# (e.g. PSF or Parm7)
+#
+# Enter selection strings for solute and solvent and get the resid ranges for
+# use with Tiger2hs. This helper is useful if resids are too large to read them
+# correctly from the system PDB cause of restarting number or hex numbers or etc.
+#
+# The script uses VMDs internal residue ids, which are zero-indexed. Adding them
+# a 1 simply makes them the valid resids for Tiger2hs.
+# -----------------------------------------------------------------------------
+
+proc residue_list_2_resids_blocks {residue_list} {
+  #make list unique and sorted
+  set residue_list [lsort -unique               $residue_list]
+  set residue_list [lsort -integer -increasing  $residue_list]
+    
+  #add 1 to residue identifiers making them resids
+  #compatible with tiger2hs
+  set resids_list {}
+  foreach item $residue_list {
+	lappend resids_list [expr $item+1]
+  }
+  
+  #build blocks of continues residue identifiers
+  set blocks {}
+  set start -1
+  set last  -1
+  lappend resids_list dummy
+  foreach item $resids_list {
+	if {$last > -1 && $start == -1} {
+	  set start $last
+	}
+	if {$last > -1 && $start > -1 && $item != [expr $last+1]} {
+	  if {$start != $last} {
+		lappend blocks "$start-$last"
+	  } else {
+		lappend blocks $start
+	  }
+	  set start $item
+	}
+	set last $item
+  }
+  
+  #output selection string
+  return  [join $blocks ","]
+}
+
+#get selections
+puts "Input) Give solute  selection (mol=top)? (e.g. protein  )"
+gets stdin solutesel
+puts "Input) Give solvent selection (mol=top)? (e.g. water    )"
+gets stdin solventsel
+puts "Input) Ignore for shellsearch (mol=top)? (e.g. a surface)"
+gets stdin ignoresel
+
+#get blocks
+set sel [atomselect top $solutesel]
+set residues [$sel get residue]
+$sel delete
+set solute_blocks [residue_list_2_resids_blocks $residues]
+
+set sel [atomselect top $solventsel]
+set residues [$sel get residue]
+$sel delete
+set solvent_blocks [residue_list_2_resids_blocks $residues]
+
+set sel [atomselect top $ignoresel]
+set residues [$sel get residue]
+$sel delete
+set ignore_blocks [residue_list_2_resids_blocks $residues]
+
+#output blocks
+puts "Info) Solute selection  : $solute_blocks"
+puts "Info) Solvent selection : $solvent_blocks"
+puts "Info) Ignore selection  : $ignore_blocks"

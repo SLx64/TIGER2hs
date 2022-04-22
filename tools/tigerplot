@@ -1,0 +1,20 @@
+#!/bin/bash
+
+echo "Info) Run in a T2* job folder to plot all replica potential energies for one specific jobid. (need xmgrace)"
+
+function funcerr {
+  echo "ERROR: $*"
+  exit 1;
+}
+
+function t2plot() {
+  [ $# -eq 1 ] || funcerr "- $FUNCNAME: Please give jobid!"
+  
+  for item in $(ls output/*/job${1}.*.log)
+  do 
+	cat $item | grep -E ^ENERGY: | awk '{print $2" "$14}'
+	echo "&"
+  done | xmgrace -pipe
+}
+
+t2plot $1

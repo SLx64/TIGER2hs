@@ -1,0 +1,12 @@
+#Input for template.sh
+
+jobname="hp7"
+
+CellX="46.479"
+CellY="46.479"
+CellZ="46.479"
+
+#TIGER2hs options
+tigersolute="1-12"
+tigersolvent="14-2310"
+tigershell="135"

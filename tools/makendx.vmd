@@ -1,0 +1,45 @@
+# Norman Geist 2022
+# - Use in VMD -
+# -----------------------------------------------------------------------------
+# Create .ndx and PDB file for TIGER2APE simulation
+# -----------------------------------------------------------------------------
+
+puts "Info) Have top molecule with PSF and PDB loaded!"
+
+set name    "colvar"
+set ncol    10
+set format  "%7d"
+
+#get user input
+puts "Input) Give solute selection to be fixed during TIGER2APE averaging phase (mol=top)? (e.g. protein)"
+gets stdin solute
+
+#get ids and set beta column
+set a [atomselect top ($solute)]
+$a set beta 1
+set ids [$a get serial]
+$a delete
+
+#write new pdb with beta set 1
+set a [atomselect top all]
+$a writepdb "$name.pdb"
+$a delete
+
+#write ndx file
+set fp [open "$name.ndx" w]
+puts $fp "\[ $name \]"
+set c 0
+foreach id $ids {
+    puts -nonewline $fp [format $format $id]
+    puts -nonewline $fp " "
+    incr c
+    
+    if {$c >= $ncol} {
+        puts $fp ""
+        set c 0
+    }
+}
+puts $fp ""
+close $fp
+
+puts "Info) File written to $name.ndx and $name.pdb"

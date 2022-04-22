@@ -1,0 +1,34 @@
+#!/bin/bash
+
+echo "Info) Run in a T2* job folder to merge all replicas DCD files. (need catdcd)"
+
+function t2merge() {
+
+  #detect jobs and replicas
+  num_replicas=$(find output/* -maxdepth 1 -type d | wc -l)
+  echo "Detected $num_replicas replicas"
+
+  jobnum=0
+  while ls output/*.job${jobnum}.restart*.tcl > /dev/null 2>&1
+  do
+	jobnum=$(($jobnum+1))
+  done
+  echo "Detected $jobnum jobs"
+
+  dcds=""
+  for ((j=0; $j<=$jobnum; j++))
+  {
+	for ((r=0; $r<$num_replicas; r++))
+	{
+	  if [ -e output/${r}/*.job${j}.${r}.dcd ]; then
+		dcds="$dcds -dcd output/${r}/*.job${j}.${r}.dcd"
+		echo "Registered output/${r}/*.job${j}.${r}.dcd"
+	  fi
+	}
+  }
+  echo "Merging ..."
+  catdcd -otype dcd -o merged.dcd $dcds
+  echo "...done!"
+}
+
+t2merge

@@ -1,0 +1,32 @@
+# Norman Geist 2018
+# - Use in VMD -
+# -----------------------------------------------------------------------------
+# You should have a topology loaded so the residue information is reliable
+# Have top molecule with PSF and PDB loaded
+#
+# Enter selection strings for solute and solvent and get the resid ranges for
+# use with Tiger2hs. This helper is useful if resids are too large to read them
+# correctly from the system PDB cause of restarting number or hex numbers or etc.
+#
+# The script uses VMDs internal residue ids, which are zero-indexed. Adding them
+# a 1 simply makes them the valid resids for Tiger2hs.
+# -----------------------------------------------------------------------------
+
+puts "Info) Have top molecule with PSF and PDB loaded!"
+
+#get user input
+puts "Input) Give solute  selection (mol=top)? (e.g. protein  )"
+gets stdin solute
+
+set sel [atomselect top water]
+set guess [lindex [lsort -increasing -integer [$sel get residue]] 0]
+puts "Input) First water residue id (guessed $guess)?"
+gets stdin firstwater
+
+puts "Input) How many waters to keep?"
+gets stdin waters
+set lastwater [expr $firstwater+$waters-1]
+
+set a [atomselect top "$solute or residue $firstwater to $lastwater"]
+$a writepsf gb.psf
+$a writepdb gb.pdb

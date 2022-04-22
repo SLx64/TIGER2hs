@@ -1,0 +1,925 @@
+# Supplementary information:
+#
+# Article:     Replica Based Protein Structure Sampling Methods III: 
+#              Parameter Sensitivity, Reproducibility and Efficacy of TIGER2hsPE
+# Authors:     Lukas Schulig, Norman Geist, Mihaela Delcea, Andreas Link, Martin Kulke
+# Institution: Institute of Pharmacy, University of Greifswald, Friedrich-Ludwig-Jahn-Str. 17, 17489 Greifswald
+#              Institute of Biochemistry, University of Greifswald, Felix-Hausdorff-Straße 4, 17487 Greifswald, Germany
+# Journal:     Journal of Chemical Theory and Computation
+#
+# -- TIGER2hsPE-PE (pair exchange version)--
+#
+# Implementation of the hybrid solvent TIGER2hsPE with OpenMM interface
+# for the NAMD - NAnoscale Molecular Dynamics program[1]. The implementation is majorly the original REMD script
+# shipped with the NAMD-2.11 source code (replica.namd). Works with multi-copy enabled NAMD builds of versions
+# 2.11 and above.
+#
+# [1] James C. Phillips, Rosemary Braun, Wei Wang, James Gumbart, Emad Tajkhorshid, Elizabeth Villa,
+#     Christophe Chipot, Robert D. Skeel, Laxmikant Kale, and Klaus Schulten.
+#     Scalable molecular dynamics with NAMD.
+#     Journal of Computational Chemistry, 26:1781-1802, 2005
+#
+
+# AUTHORED: Norman Geist, Lukas Schulig 2021 (Language: TCL)
+# NOTE:     This implementation replaces the steps_per_run option by tigerheat, tigersample,
+#           tigerquench parameters and additionally features a minruns parameter implementing
+#           a minimization prior to REMD sampling. Also the parameter remdpressure [0|1] enables the computation
+#           of temperature dependant target pressures for the langevinpiston barostat. The parameter runs_per_frame
+#           has been removed and frames_per_restart was replaced by runs_per_restart.
+#           This method only makes sense when applied to systems using explicit solvation.
+#           OpenMM (tigeropenmm) is used to evaluate the potential energy of the replicas after each run using implicit solvent.
+#           Therefore an additional Parm7 file is required that only contains the protein and a number of
+#           solvent molecules that will build the solvent shell (tigerimpltop).
+#           Respective selections must be given to select solute and solvent by resids, the number of shell solvents to
+#           be compatible with the implicit Parm7 file and a angstrom spacing for the domain decomposition used
+#           for the fast nearest neighbor search (parameters tigersolute, tigersolvent, tigershell, tigerspace)"
+#	        The respective selections tigersolute and tigersolvent can contain single resids or ranges using '-' seperated
+#	        by ',' (e.g. 1-5,7,9,11-15). A selection "tigerignore" can be given to ignore parts of the solute during the shellsearch.
+#           This might be useful to exclude e.g. a surface.
+#           The use of periodic boundary conditions during the implicit solvent energy evalutation can be enabled by passing
+#           a xsc file to OpenMM.
+#           The "sortreplicas" tools is no longer required. All resulting trajectory DCD files
+#           can just be concatenated, they all build the baseline ensemble.
+
+after 5000 replicaBarrier; #prevents segfaulting if parallel startup is really unsynchronous
+
+### get replica info ########
+set nr [numReplicas]
+if { $num_replicas != $nr } {
+    error "restart with wrong number of replicas"
+}
+set replica_id [myReplica]
+#############################
+
+#PROCS ##############################################
+proc save_callback {labels values} {
+    global saved_labels saved_values
+    set saved_labels $labels
+    set saved_values $values
+}
+callback save_callback
+
+proc save_array {} {
+    global saved_labels saved_values saved_array
+    foreach label $saved_labels value $saved_values {
+        set saved_array($label) $value
+    }
+}
+
+proc rselect {num_reps exclude_ids} {
+    set svar [expr int($num_reps * rand())]
+    while {[lsearch -integer -exact $exclude_ids $svar] > -1} {
+        set svar [expr int($num_reps * rand())]
+    }
+    return $svar
+}
+
+proc readxsc {xsc} {
+    #read input xsc
+    set fp [open "$xsc" r]
+    set raw [read $fp]
+    close $fp
+    
+    #read just the 1st non-commend line
+    set lines [split $raw "\n"]
+    foreach line $lines {
+        if {[regexp {^[0-9]} $line]} {
+            set x [lindex $line 1]
+            set y [lindex $line 5]
+            set z [lindex $line 9]
+            return [list $x $y $z]
+        }
+    }
+    
+    #if we get here, the xsc is bad
+    return 1
+}
+
+proc getE {log} {
+    #read logfile
+    set fp [open "$log" r]
+    set raw [read $fp]
+    close $fp
+    
+    #search and extract energy
+    set e 0
+    set lines [split $raw "\n"]
+    foreach line $lines {
+        if {[regexp {([\+\-]?[0-9]+\.?[0-9]*)} $line match E]} {
+            set e $E
+        }
+    }
+    return $e
+}
+
+proc timer_read {} {
+    set clocksource "/proc/uptime"
+    if {[file exists $clocksource]} {
+        set fp [open $clocksource r]
+        set raw [read $fp]
+        close $fp
+        
+        return [lindex $raw 0]
+    } else {
+        puts "Warn: TIMING INFORMATION ONLY AVAILABLE TO UNIX BASED SYSTEMS ($clocksource)"
+        return 0
+    }
+}
+
+proc timer_init {} {
+    global TIMERSTAMPS
+    array set TIMERSTAMPS {}
+}
+
+proc timer_start {name} {
+    global TIMERSTAMPS
+    set TIMERSTAMPS($name) [timer_read]
+}
+
+proc timer_now {name} {
+    global TIMERSTAMPS
+    if {[info exists TIMERSTAMPS($name)]} {
+        set lstamp [expr [timer_read]-$TIMERSTAMPS($name)]
+        set TIMERSTAMPS($name.val) $lstamp
+        return $lstamp
+    } else {
+        puts "Warn: TIMER $name NOT RUNNING"
+        return 0
+    }
+}
+
+proc timer_stop {name} {
+    global TIMERSTAMPS
+    if {[info exists TIMERSTAMPS($name)]} {
+        set lstamp [expr [timer_read]-$TIMERSTAMPS($name)]
+        set TIMERSTAMPS($name.val) $lstamp
+        set TIMERSTAMPS($name) 0
+        return $lstamp
+    } else {
+        puts "Warn: TIMER $name NOT STARTED"
+        return 1
+    }
+}
+
+proc timer_get {name} {
+    global TIMERSTAMPS
+    if {[info exists TIMERSTAMPS($name.val)]} {
+        return $TIMERSTAMPS($name.val)
+    } else {
+        puts "Warn: TIMER $name NOT STOPPED"
+        return 1
+    }
+}
+
+proc s2human {secs {prec 2}} {
+    set dur ""
+    set factors {1. 60. 60. 24.}
+    set captions {"s" "m" "h" "d"}
+    set values 0
+    lset values 0 $secs
+    
+    for {set i 1} {$i<[llength $factors]} {incr i} {
+        lappend values [expr int([lindex $values [expr $i-1]]/[lindex $factors $i])]
+        if {[lindex $values $i] > 0} {
+            lset values [expr $i-1] [expr [lindex $values [expr $i-1]] - [lindex $values $i]*[lindex $factors $i]]
+        } else {
+            set i [llength $factors]
+        }
+    }
+    for {set i 0} {$i<[llength $values]} {incr i} {
+        if {[lindex $values $i] > 0} {
+            set tprec [expr $i > 0 ? 0 : $prec]
+            set dur [concat [format %.${tprec}f [lindex $values $i]][lindex $captions $i] $dur]
+        }
+    }
+    return $dur
+}
+proc sel2map {sel} {
+    array set map {}
+    set ranges [split $sel ","]
+    foreach range $ranges {
+        set items [split $range "-"]
+        if {[llength $items] > 1} {
+            for {set i [lindex $items 0]} {$i <= [lindex $items 1]} {incr i} {
+                set map($i) 1
+            }
+        } else {
+            set map($items) 1
+        }
+    }
+    return [array get map]
+}
+
+proc getBoundaries {atom_array natom} {
+    array set atoms  $atom_array
+    array set minmax {x.center 0 y.center 0 z.center 0}
+    for {set i 1} {$i <= $natom} {incr i} {
+        set atom $atoms($i)
+        set x [lindex $atom 3]
+        set y [lindex $atom 4]
+        set z [lindex $atom 5]
+        
+        set minmax(x.center) [expr {$minmax(x.center) + $x}]
+        set minmax(y.center) [expr {$minmax(y.center) + $y}]
+        set minmax(z.center) [expr {$minmax(z.center) + $z}]
+        
+        if {![info exists minmax(x.min)] || $x < $minmax(x.min)} { set minmax(x.min) $x }
+        if {![info exists minmax(y.min)] || $y < $minmax(y.min)} { set minmax(y.min) $y }
+        if {![info exists minmax(z.min)] || $z < $minmax(z.min)} { set minmax(z.min) $z }
+        if {![info exists minmax(x.max)] || $x > $minmax(x.max)} { set minmax(x.max) $x }
+        if {![info exists minmax(y.max)] || $y > $minmax(y.max)} { set minmax(y.max) $y }
+        if {![info exists minmax(z.max)] || $z > $minmax(z.max)} { set minmax(z.max) $z }
+    }
+    set minmax(x.center) [expr $minmax(x.center) / $natom]
+    set minmax(y.center) [expr $minmax(y.center) / $natom]
+    set minmax(z.center) [expr $minmax(z.center) / $natom]
+    
+    set minmax(x.dim) [expr $minmax(x.max) - $minmax(x.min)]
+    set minmax(y.dim) [expr $minmax(y.max) - $minmax(y.min)]
+    set minmax(z.dim) [expr $minmax(z.max) - $minmax(z.min)]
+    
+    return [array get minmax]
+}
+
+proc move {atom_array natom vec} {
+    array set atoms $atom_array
+    for {set i 1} {$i <= $natom} {incr i} {
+        set atom $atoms($i)
+        set x [lindex $atom 3]
+        set y [lindex $atom 4]
+        set z [lindex $atom 5]
+        
+        set atom [lset atom 3 [expr {$x + [lindex $vec 0]}]]
+        set atom [lset atom 4 [expr {$y + [lindex $vec 1]}]]
+        set atom [lset atom 5 [expr {$z + [lindex $vec 2]}]]
+        set atoms($i) $atom
+    }
+    
+    return [array get atoms]
+}
+
+proc tcl::mathfunc::pmodulo {n m} {
+    return [expr {$n-$m * floor(1.* $n/$m)}]
+}
+
+proc wrap {atom_array natom boxvec} {
+    array set atoms $atom_array
+    set boxx [lindex $boxvec 0]
+    set boxy [lindex $boxvec 1]
+    set boxz [lindex $boxvec 2]
+    
+    for {set i 1} {$i <= $natom} {incr i} {
+        set atom $atoms($i)
+        set x [lindex $atom 3]
+        set y [lindex $atom 4]
+        set z [lindex $atom 5]
+        
+        #wrapping on-demand saves time alot
+        if {$x < 0 || $x > $boxx} { set atom [lset atom 3 [expr {pmodulo($x,$boxx)}]] }
+        if {$y < 0 || $y > $boxy} { set atom [lset atom 4 [expr {pmodulo($y,$boxy)}]] }
+        if {$z < 0 || $z > $boxz} { set atom [lset atom 5 [expr {pmodulo($z,$boxz)}]] }
+        
+        set atoms($i) $atom
+    }
+    
+    return [array get atoms]
+}
+
+#perform domain decomposition with given pbc box
+#using the same box for two molecules and
+#the generated domain neighbor lists, fast atomistic nearest
+#neighbors searches are easily realized
+#Hint: If box is periodic, it's safe to have multiple solutes
+proc decompose {atom_array natom dspace boxvec {neighborlists 0}} {
+    array set atoms  $atom_array
+    
+    #get grid sizes
+    set xdim   [lindex $boxvec 0]
+    set ydim   [lindex $boxvec 1]
+    set zdim   [lindex $boxvec 2]
+    set xs     [expr int(ceil($xdim / $dspace))]
+    set ys     [expr int(ceil($ydim / $dspace))]
+    set zs     [expr int(ceil($zdim / $dspace))]
+    puts "Info: TIGER2hsPE - DOMAIN GRID     [format %8s $xs] [format %8s $ys] [format %8s $zs]"
+    
+    #build domains
+    array set domains {}
+    array set xocc    {}
+    array set yocc    {}
+    array set zocc    {}
+    for {set i 1} {$i <= $natom} {incr i} {
+        set atom $atoms($i)
+        set x [lindex $atom 3]
+        set y [lindex $atom 4]
+        set z [lindex $atom 5]
+        set ix [expr {int($x / $dspace)}]
+        set iy [expr {int($y / $dspace)}]
+        set iz [expr {int($z / $dspace)}]
+        
+        incr    domains($ix.$iy.$iz.natom)
+        lappend domains($ix.$iy.$iz) $i
+        
+        set xocc($ix) 1
+        set yocc($iy) 1
+        set zocc($iz) 1
+    }
+    set xsc [llength [array names xocc]]
+    set ysc [llength [array names yocc]]
+    set zsc [llength [array names zocc]]
+    puts "Info: TIGER2hsPE - DOMAIN OCCUPIED [format %8s $xsc] [format %8s $ysc] [format %8s $zsc]"
+    
+    #generate neighbor lists
+    if {$neighborlists} {
+        for {set ix 0} {$ix <= $xs} {incr ix} {
+            for {set iy 0} {$iy <= $ys} {incr iy} {
+                for {set iz 0} {$iz <= $zs} {incr iz} {
+                    if {[info exists domains($ix.$iy.$iz)] && $domains($ix.$iy.$iz.natom) > 0} {
+                        #add respective lower and higher neighbors in
+                        #all dimensions also considering periodicity
+                        array set temp {}
+                        set temp(ix) $ix
+                        set temp(iy) $iy
+                        set temp(iz) $iz
+                        set temp(lix) [expr {int(pmodulo($ix-1,$xs))}]
+                        set temp(hix) [expr {int(pmodulo($ix+1,$xs))}]
+                        set temp(liy) [expr {int(pmodulo($iy-1,$ys))}]
+                        set temp(hiy) [expr {int(pmodulo($iy+1,$ys))}]
+                        set temp(liz) [expr {int(pmodulo($iz-1,$zs))}]
+                        set temp(hiz) [expr {int(pmodulo($iz+1,$zs))}]
+                        
+                        foreach xitem {ix lix hix} {
+                            foreach yitem {iy liy hiy} {
+                                foreach zitem {iz liz hiz} {
+                                    lappend domains($ix.$iy.$iz.neighbors) $temp($xitem).$temp($yitem).$temp($zitem)
+                                }
+                            }
+                        }
+                        array unset temp
+                    }
+                }
+            }
+        }
+    }
+    
+    #return data
+    set domains(x.max) $xs
+    set domains(y.max) $ys
+    set domains(z.max) $zs
+    return [array get domains]
+}
+
+proc writepdb {atom_array natom outpdb {boxvec {0 0 0}}} {
+    array set atoms $atom_array
+    set fp [open "$outpdb" w]
+    
+    #write cryst1 record
+    puts -nonewline $fp "CRYST1"
+    puts -nonewline  $fp [format %9.3f [lindex $boxvec 0]]
+    puts -nonewline  $fp [format %9.3f [lindex $boxvec 1]]
+    puts -nonewline  $fp [format %9.3f [lindex $boxvec 2]]
+    puts -nonewline  $fp [format %7.2f 90]
+    puts -nonewline  $fp [format %7.2f 90]
+    puts -nonewline  $fp [format %7.2f 90]
+    puts $fp ""
+    
+    for {set i 1} {$i <= $natom} {incr i} {
+        set atom $atoms($i)
+        set name  [lindex $atom 0]
+        set res   [lindex $atom 1]
+        set resid [lindex $atom 2]
+        set x     [lindex $atom 3]
+        set y     [lindex $atom 4]
+        set z     [lindex $atom 5]
+        
+        puts -nonewline $fp "ATOM  "
+        puts -nonewline $fp [format %5u [expr $i % 100000]]
+        puts -nonewline $fp " "
+        puts -nonewline $fp [format %4s $name]
+        puts -nonewline $fp " "
+        puts -nonewline $fp [format %4s $res]
+        puts -nonewline $fp " "
+        puts -nonewline $fp [format %4u [expr $resid % 10000]]
+        puts -nonewline $fp " "
+        puts -nonewline $fp "   "
+        puts -nonewline  $fp [format %8.3f $x]
+        puts -nonewline  $fp [format %8.3f $y]
+        puts -nonewline  $fp [format %8.3f $z]
+        puts -nonewline  $fp [format %6.2f 0]
+        puts -nonewline  $fp [format %6.2f 0]
+        puts $fp ""
+    }
+    close $fp
+}
+
+proc filterPDB {inpdb outpdb solutesel solventsel ignoresel dspace boxvec maxsol} {
+    puts "Info: TIGER2hsPE - PROCESSING $inpdb"
+    puts "Info: TIGER2hsPE - SOLUTE  RESIDUES  $solutesel"
+    puts "Info: TIGER2hsPE - SOLVENT RESIDUES  $solventsel"
+    puts "Info: TIGER2hsPE - IGNORE FOR SHELL  $ignoresel"
+    
+    #read input pdb
+    set fp [open "$inpdb" r]
+    set raw [read $fp]
+    close $fp
+    
+    #setup selection maps
+    array set solute  [sel2map $solutesel]
+    array set ignore  [sel2map $ignoresel]
+    array set solvent [sel2map $solventsel]
+    
+    #read selected atoms from inpdb --------------------------------------------------------------------------------
+    set csolute  0
+    set csolute2 0
+    set csolvent 0
+    set cres     0
+    set l  ""
+    array set solvent_atoms {}
+    array set solute_atoms  {}
+    array set solute_atoms2 {}
+    set lines [split $raw "\n"]
+    foreach line $lines {
+        if {[regexp {^ATOM} $line]} {
+            #get columns from pdb line
+            set name  [string trim [string range $line 12 15]]
+            set res   [string trim [string range $line 17 20]]
+            set resid [string trim [string range $line 22 26]]
+            set x     [string trim [string range $line 30 37]]
+            set y     [string trim [string range $line 38 45]]
+            set z     [string trim [string range $line 46 53]]
+            
+            #renum resids in case of hex numbers etc.
+            #so solutesel and solventsel are reliable
+            if {$resid != $l} {
+                set l $resid
+                incr cres
+            }
+            set resid $cres
+            
+            #store atom if selected
+            if {[info exists solute($resid)] && ![info exists ignore($resid)]} {
+                incr csolute
+                set solute_atoms($csolute) [list $name $res $resid $x $y $z]
+            }
+            if {[info exists solute($resid)]} {
+                incr csolute2
+                set solute_atoms2($csolute2) [list $name $res $resid $x $y $z]
+            }
+            if {[info exists solvent($resid)]} {
+                incr csolvent
+                set solvent_atoms($csolvent) [list $name $res $resid $x $y $z]
+            }
+        }
+    }
+    set tignore [expr $csolute2-$csolute]
+    
+    puts "Info: TIGER2hsPE - SOLUTE  ATOMS $csolute ($tignore ignored during shellsearch)"
+    puts "Info: TIGER2hsPE - SOLVENT ATOMS $csolvent"
+    #---------------------------------------------------------------------------------------------------------------
+    
+    #center solute and wrap coordinates ---------------------------------------------------------------------------
+    array set solute_minmax [getBoundaries [array get solute_atoms] $csolute]
+    set boxx   [lindex $boxvec 0]
+    set boxy   [lindex $boxvec 1]
+    set boxz   [lindex $boxvec 2]
+    set shiftX [expr ($boxx/2) - $solute_minmax(x.center)]
+    set shiftY [expr ($boxy/2) - $solute_minmax(y.center)]
+    set shiftZ [expr ($boxz/2) - $solute_minmax(z.center)]
+    puts "Info: TIGER2hsPE - CENTERING SOLUTE $shiftX $shiftY $shiftZ"
+    array set solute_atoms  [move [array get solute_atoms ] $csolute  [list $shiftX $shiftY $shiftZ]]
+    array set solute_atoms2 [move [array get solute_atoms2] $csolute2 [list $shiftX $shiftY $shiftZ]]
+    array set solvent_atoms [move [array get solvent_atoms] $csolvent [list $shiftX $shiftY $shiftZ]]
+    #save unwrapped coordinates
+    array set solute_atoms2_bak  [array get solute_atoms2]
+    array set solvent_atoms_bak  [array get solvent_atoms]
+    puts "Info: TIGER2hsPE - APPLYING PBC BOX $boxvec"
+    array set solute_atoms  [wrap [array get solute_atoms ] $csolute  $boxvec]
+    array set solute_atoms2 [wrap [array get solute_atoms2] $csolute2 $boxvec]
+    array set solvent_atoms [wrap [array get solvent_atoms] $csolvent $boxvec]
+    #---------------------------------------------------------------------------------------------------------------
+    
+    #perform domain decomposition ----------------------------------------------------------------------------------
+    puts "Info: TIGER2hsPE - DOMAIN DECOMPOSITION AND NEIGHBOR LIST SETUP SPACING=$dspace..."
+    array set solute_domains  [decompose [array get solute_atoms ] $csolute  $dspace $boxvec 1]
+    array set solvent_domains [decompose [array get solvent_atoms] $csolvent $dspace $boxvec 0]
+    #---------------------------------------------------------------------------------------------------------------
+    
+    #perform nearest neighbor search based on domains --------------------------------------------------------------
+    puts "Info: TIGER2hsPE - ENTERING FAST NEAREST NEIGHBOR SEARCH..."
+    set exhaust [expr $csolute * $csolvent]
+    set pairs   0
+    array set dists {}
+    #loop solute domains
+    for {set ix 0} {$ix <= $solute_domains(x.max)} {incr ix} {
+        for {set iy 0} {$iy <= $solute_domains(y.max)} {incr iy} {
+            for {set iz 0} {$iz <= $solute_domains(z.max)} {incr iz} {
+                #domain exists and not empty?
+                if {[info exists solute_domains($ix.$iy.$iz)] && $solute_domains($ix.$iy.$iz.natom) > 0} {
+                    #loop possible neighbors from solvent
+                    foreach neighbor $solute_domains($ix.$iy.$iz.neighbors) {
+                        #domain exists and not empty?
+                        if {[info exists solvent_domains($neighbor)] && $solvent_domains($neighbor.natom) > 0} {
+                            #perform all-atom measures on occupied neighboring domain
+                            foreach item1 $solute_domains($ix.$iy.$iz) {
+                                set atom1 $solute_atoms($item1)
+                                set x1 [lindex $atom1 3]
+                                set y1 [lindex $atom1 4]
+                                set z1 [lindex $atom1 5]
+                                foreach item2 $solvent_domains($neighbor) {
+                                    set atom2 $solvent_atoms($item2)
+                                    set resid [lindex $atom2 2]
+                                    set x2    [lindex $atom2 3]
+                                    set y2    [lindex $atom2 4]
+                                    set z2    [lindex $atom2 5]
+                                    #shorter periodic distance
+                                    set dx  [expr {pmodulo($x1-$x2+($boxx/2.),$boxx) - ($boxx/2.)}]
+                                    set dy  [expr {pmodulo($y1-$y2+($boxy/2.),$boxy) - ($boxy/2.)}]
+                                    set dz  [expr {pmodulo($z1-$z2+($boxz/2.),$boxz) - ($boxz/2.)}]
+                                    set dsq [expr {$dx*$dx + $dy*$dy + $dz*$dz}]
+                                    lappend dists($dsq) $resid
+                                    incr pairs
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    puts "Info: TIGER2hsPE - COMPLETED SHELL SEARCH - DD COMPUTED ONLY $pairs PAIRS OUT OF $exhaust"
+    #-----------------------------------------------------------------------------------------------------------------
+    
+    #identify solvent shell by distance ----------------------------------------------------------------------------
+    set sorted [lsort -real -increasing [array names dists]]
+    array set shell  {}
+    array set scount {}
+    foreach item $sorted {
+        foreach resid $dists($item) {
+            if {![info exists shell($resid)] && [llength [array names shell]] < $maxsol} {
+                set shell($resid) 1
+                puts "Info: TIGER2hsPE - ASSIGNED $resid TO SHELL WITH DISTANCE [expr sqrt($item)]"
+            }
+            set scount($resid) 1
+        }
+    }
+    set sc [llength [array names scount]]
+    puts "Info: TIGER2hsPE - TOTAL NUMBER OF SHELL CANDIDATES $sc"
+    
+    #fast neighbor search tweaks
+    if {$sc < $maxsol} {
+        puts stderr "Error: TIGER2hsPE - NEAREST NEIGHBOR SEARCH RETURNED LESS SOLVENTS THAN REQUESTED $sc < $maxsol"
+        puts stderr "Error: TIGER2hsPE - INCREASE dpace"
+        exit 1
+    } elseif {[expr ($sc > ($maxsol * 1.66))]} {
+        puts "Warn: TIGER2hsPE - NEAREST NEIGHBOR SEARCH RETURNED MUCH MORE SOLVENTS THAN REQUESTED"
+        puts "Warn: TIGER2hsPE - DECREASING dpace MIGHT IMPROVE PERFORMANCE"
+    }
+    #---------------------------------------------------------------------------------------------------------------
+    
+    #join solute2 with selected solvents and write pdb --------------------------------------------------------------
+    set ac $csolute2
+    for {set i 1} {$i <= $csolvent} {incr i} {
+        set resid [lindex $solvent_atoms_bak($i) 2]
+        if {[info exists shell($resid)]} {
+            incr ac
+            set solute_atoms2_bak($ac) $solvent_atoms_bak($i)
+        }
+    }
+    
+    writepdb [array get solute_atoms2_bak] $ac $outpdb
+    puts "Info: TIGER2hsPE - DONE CREATING SHELL PDB $outpdb WITH $maxsol SOLVENTS"
+    #---------------------------------------------------------------------------------------------------------------
+}
+#####################################################
+
+########## INIT TIGER2hsPE ##############################
+if {[info exists restart_root]} { #restart
+    puts "Info: TIGER2hsPE - RESTARTING FROM PREVIOUS JOB"
+    set restart_root [format $restart_root $replica_id]
+    source $restart_root.$replica_id.tcl
+} else {
+    puts "Info: TIGER2hsPE - INITIALIZING NEW JOB"
+    set i_job  0
+    set i_run  0
+    set i_step 0
+    if {[info exists first_timestep]} {
+        set i_step $first_timestep
+    }
+    for {set i 0} {$i < $num_replicas} {incr i} {
+        set replica(TempByRank.$i) $i
+        set replica(RankByTemp.$i) $i
+    }
+}
+
+set remdpressure 0
+if {[info exists remdpressuregen]} {
+    if {$remdpressuregen == 1} {
+        set remdpressure 1
+    }
+}
+#####################################################
+
+#PROCS ##############################################
+proc replica_temp { i } {
+    global num_replicas min_temp max_temp
+    return [format "%.2f" [expr ($min_temp * \
+            exp( log(1.0*$max_temp/$min_temp)*(1.0*$i/($num_replicas-1)) ) )]]
+}
+#####################################################
+
+##### SIMULATION SETUP ##############################
+set job_output_root "$output_root.job$i_job"
+set replica(temperature) [replica_temp $replica(RankByTemp.$replica_id)]
+
+set history_file [open [format "$job_output_root.$replica_id.history" $replica_id] "w"]
+fconfigure $history_file -buffering line
+
+set incr_step [expr $tigerheat + $tigersample + $tigerquench]
+
+binaryoutput    no
+firsttimestep   $i_step
+outputEnergies  [expr $incr_step/100]
+outputTiming    [expr $incr_step/10]
+seed 	   	  [expr int(0*srand(int(100000*rand()) + 100*$replica_id) + 100000*rand())]
+outputname 	  [format $job_output_root.$replica_id $replica_id]
+
+if {$i_run} { #restart
+    coordinates $restart_root.$replica_id.coor
+    velocities $restart_root.$replica_id.vel
+    extendedSystem $restart_root.$replica_id.xsc
+} else {
+    coordinates $initial_pdb
+    temperature $replica(temperature)
+}
+
+source $namd_config_file
+#####################################################
+
+### INITIALIZE ON DEMAND FRAME OUTPUT ###
+puts "Info: TIGER2hsPE - INITIALIZING ON-DEMAND COORDINATES"
+#just needed for "run"
+if {$remdpressure} {
+    langevinpistontarget 1
+}
+langevintemp $replica(temperature)
+langevinpistontemp $replica(temperature)
+dcdfreq $incr_step; #just != 0 to init dcd output
+minimize 0
+dcdfreq 0
+
+proc dcdframe {} {
+    puts "Info: TIGER2hsPE - WRITING COORDINATES"
+    checkpoint
+    set steps [stepspercycle]
+    set curr  [firsttimestep]
+    dcdfreq  $steps
+    run $steps
+    dcdfreq 0
+    firsttimestep $curr
+    revert
+}
+#########################################
+
+### PERFORM INITIAL MINIMIZATION ###
+if {[info exists minruns]} {
+    if {$minruns > 0 && $i_run == 0} {
+        puts "Info: TIGER2hsPE - PERFORMING MINIMIZATION"
+        if {$remdpressure} {
+            langevinpistontarget 1
+        }
+        langevintemp $replica(temperature)
+        langevinpistontemp $replica(temperature)
+        minimize [expr $incr_step*$minruns]
+        firsttimestep 0
+    }
+}
+######################################
+
+#enable continuous heating modification
+set conheat 0
+if {[info exists tigerconheat] && $tigerconheat} {
+    puts "Info: TIGER2hsPE - ENABLED CONTINUOUS HEATING MODIFICATION"
+    set conheat 1
+}
+
+#multiexchange?
+puts "Info: TIGER2hsPE - PAIR-WISE GLOBAL RANDOM EXCHANGE"
+
+#########################################
+puts "Info: TIGER2hsPE - ENTERING MAIN LOOP"
+timer_init
+while {$i_run < $num_runs} {
+    timer_start "cycle"
+    langevinTemp $replica(temperature)
+    langevinPistonTemp $replica(temperature)
+    if {$remdpressure} {
+        langevinpistontarget [expr 3*0.00133*pow(10,8.14019-(1810.94/(244.485+($replica(temperature)-273.15))))]
+    }
+    
+    puts "Info: TIGER2hsPE - SAMPLING RUN $i_run"
+    run [expr $tigerheat+$tigersample]
+    
+    if {$conheat} {
+        checkpoint
+        set ch_old_temp $replica(temperature)
+    }
+    
+    langevinTemp $min_temp
+    langevinPistonTemp $min_temp
+    if {$remdpressure} {
+        langevinpistontarget [expr 3*0.00133*pow(10,8.14019-(1810.94/(244.485+($min_temp-273.15))))]
+    }
+    rescalevels [expr sqrt(1.0*$min_temp/$replica(temperature))]
+    puts "Info: TIGER2hsPE - QUENCHING RUN $i_run"
+    run $tigerquench
+    
+    #save temperature for history
+    save_array
+    set TEMP $saved_array(TEMP)
+    
+    #compute noiseless potential energy through OpenMM
+    #write coordinates to pdb
+    output [format "$output_root.offer.$replica_id" ""]
+    set boxvec [readxsc [format "$output_root.offer.$replica_id.xsc" ""]]
+    
+    #create shell pdb and crd
+    timer_start "shellsearch"
+    filterPDB [format "$output_root.offer.$replica_id.coor" ""] [format "$output_root.impl.$replica_id.coor" ""] $tigersolute $tigersolvent $tigerignore $tigerspace $boxvec $tigershell
+    timer_stop "shellsearch"
+    
+    replicaBarrier
+    
+    set xscfile "''"
+    if {$tigerimplpbc} {
+        set xscfile [format "$output_root.offer.$replica_id.xsc" ""]
+    }
+    
+    #run OpenMM
+    timer_start "OpenMM"
+    puts "Info: TIGER2hsPE - WAITING FOR ENERGY RUN $i_run"
+    catch {
+        eval exec $ommpre $tigeromm $ommsuff -t $tigerimpltop \
+                -c [format "$output_root.impl.$replica_id.coor"   ""] \
+                -o [format "$output_root.impl.$replica_id.mdout"  ""] \
+                -b $xscfile -gb $tigerimplgb -sc $tigerimplsaltcon \
+                -p $tigerimplplatform
+    } err
+    puts $err
+    timer_stop "OpenMM"
+    
+    #get my implicit solvent energy
+    set POTENTIAL [getE [format "$output_root.impl.$replica_id.mdout" ""]]
+        
+    #save history
+    incr i_step $incr_step
+    puts $history_file "$i_step $replica(RankByTemp.$replica_id) $replica(temperature) $TEMP $POTENTIAL"
+
+    replicaBarrier
+    
+    #let base temp replica do swap decision
+    set bid $replica(TempByRank.0)
+    if {$replica_id != $bid} {
+        
+        #send potential energy
+        replicaSend $POTENTIAL $bid
+        
+        #get new replica->temperature mapping
+        array unset replica
+        array set replica [replicaRecv $bid]
+        
+    } else {
+        # let base temp replica write a frame prior to exchange
+        dcdframe
+
+        #collect potential energies
+        array unset RankByPot
+        array unset PotByRank
+        array set RankByPot {}
+        array set PotByRank {}
+        set RankByPot($replica_id) $POTENTIAL
+        set PotByRank($POTENTIAL) $replica_id
+        for {set i 0} {$i < $num_replicas} {incr i} {
+            if {$i != $replica_id} {
+                set pot [replicaRecv $i]
+                while {[info exists PotByRank($pot)]} {
+                    puts "Warn: TIGER2hsPE - ENERGY DUPLICATES RUN $i_run"
+                    set pot [expr $pot + (rand()*1e-10)]
+                }
+                set RankByPot($i) $pot
+                set PotByRank($pot) $i
+            }
+        }
+        
+        #perform multiple pairwise random exchanges without a run inbetween, until all replicas were asked ;)
+        set rused {}
+        while {[llength $rused] < $num_replicas} {
+            #perform check between two random replicas
+            set tbid [rselect $num_replicas $rused]
+            set rid [rselect $num_replicas $rused]
+            set temp  [replica_temp $replica(RankByTemp.$tbid)]
+            set temp2 [replica_temp $replica(RankByTemp.$rid)]
+            
+            #exclude temp > temp2
+            if {$temp >= $temp2} {
+                continue
+            }
+            
+            lappend rused $tbid $rid
+            
+            set BOLTZMAN [expr 0.001987191]
+            set dbeta [expr (1.0/($min_temp * $BOLTZMAN))]
+            set pot $RankByPot($tbid)
+            set pot2 $RankByPot($rid)
+            set delta [expr $dbeta * ($pot2 - $pot)]
+            set doswap [expr $delta < 0. || exp(-1. * $delta) > rand()]
+            
+            #register swaps & samples to write
+            if { ! $doswap } {             
+                puts stderr "EXCHANGE_REJECT $tbid ($temp) $rid ($temp2) RUN $i_run"
+            } else {               
+                puts stderr "EXCHANGE_ACCEPT $tbid ($temp) $rid ($temp2) RUN $i_run"
+                
+                set old_temp  $replica(RankByTemp.$tbid)
+                set old_temp2 $replica(RankByTemp.$rid)
+                
+                set replica(TempByRank.$old_temp) $rid
+                set replica(RankByTemp.$rid) $old_temp
+                
+                set replica(TempByRank.$old_temp2) $tbid
+                set replica(RankByTemp.$tbid) $old_temp2
+            }
+        }
+        
+        #broadcast new information to other replicas
+        for {set i 0} {$i < $num_replicas} {incr i} {
+            if {$i != $replica_id} {
+                replicaSend [array get replica] $i
+            }
+        }
+    }
+    #--------------------------------------------------------------
+    
+    #update own temperature
+    set replica(temperature) [replica_temp $replica(RankByTemp.$replica_id)]
+    
+    if {$conheat} {
+        if {$ch_old_temp > $replica(temperature)} {
+            if {[expr $replica(temperature)-$min_temp] > [expr abs($replica(temperature)-$ch_old_temp)]} {
+                revert
+                rescalevels [expr sqrt(1.0*$replica(temperature)/$ch_old_temp)]
+            } else {
+                rescalevels [expr sqrt(1.0*$replica(temperature)/$min_temp)]
+            }
+        } else {
+            revert
+            rescalevels [expr sqrt(1.0*$replica(temperature)/$ch_old_temp)]
+        }
+    } else {
+        rescalevels [expr sqrt(1.0*$replica(temperature)/$min_temp)]
+    }
+    
+    #timings
+    set tcycle  [s2human [timer_stop "cycle" ]]
+    set tshell  [s2human [timer_get  "shellsearch"]]
+    set topenmm [s2human [timer_get  "OpenMM"]]
+    
+    puts "Info: TIGER2hsPE - COMPLETED RUN $i_run IN $tcycle SHELLSEARCH TOOK $tshell OpenMM TOOK $topenmm"
+    incr i_run
+    
+    #write restart information
+    if { $i_run % $runs_per_restart == 0 ||
+        $i_run == $num_runs } {  # restart
+        puts "Info: TIGER2hsPE - WRITING RESTART INFORMATION AT RUN $i_run"
+        set restart_root "$job_output_root.restart$i_run"
+        output [format $restart_root.$replica_id $replica_id]
+        set rfile [open [format "$restart_root.$replica_id.tcl" $replica_id] "w"]
+        puts $rfile [list array set replica [array get replica]]
+        close $rfile
+        replicaBarrier
+        if { $replica_id == 0 } {
+            set rfile [open [format "$restart_root.tcl" ""] "w"]
+            puts $rfile [list set i_job [expr $i_job + 1]]
+            puts $rfile [list set i_run $i_run]
+            puts $rfile [list set i_step $i_step]
+            puts $rfile [list set restart_root $restart_root]
+            close $rfile
+            if [info exists old_restart_root] {
+                set oldroot [format $old_restart_root ""]
+                file delete $oldroot.tcl
+            }
+        }
+        replicaBarrier
+        if [info exists old_restart_root] {
+            set oldroot [format $old_restart_root $replica_id]
+            file delete $oldroot.$replica_id.tcl
+            file delete $oldroot.$replica_id.coor
+            file delete $oldroot.$replica_id.vel
+            file delete $oldroot.$replica_id.xsc
+        }
+        set old_restart_root $restart_root
+    }
+}
+
+replicaBarrier
+
+
+

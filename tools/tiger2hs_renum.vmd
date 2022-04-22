@@ -1,0 +1,31 @@
+# Norman Geist 2018
+# - Use in VMD -
+# -----------------------------------------------------------------------------
+# Used to renumber the resids in a molecular system to
+# circumvent VMD/NAMD behavior where consecutive resids get
+# the same resid when numbers exceed 9999, which would
+# otherwise break TIGER2hs.
+# -----------------------------------------------------------------------------
+
+puts [concat "Info) Renumbering resids for" [molinfo top get name]]
+set a [atomselect top all]
+
+set rc 0
+set al {}
+set rl {}
+set rlast -1
+foreach item [$a get residue] {
+  if {$item != $rlast} {
+    incr rc
+    if {[string length $rc] > 4} {
+      puts "Rotating..."
+      set rc 1
+    }
+  }
+  
+  lappend rl $rc
+  set rlast $item
+}
+
+$a set resid $rl
+$a delete

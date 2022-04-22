@@ -1,0 +1,12 @@
+#Input for template.sh
+
+jobname="trpcage"
+
+CellX="58.517"
+CellY="58.517"
+CellZ="58.517"
+
+#TIGER2hs options
+tigersolute="1-20"
+tigersolvent="21-5034"
+tigershell="210"
