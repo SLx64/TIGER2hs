@@ -69,7 +69,7 @@ Also the OpenMM script `tigeromm` is changed from `remd/omm_impl_spe.py` to `rem
 | tigerimpltop           | Topology file for reduced system |
 | tigerimplplatform      | OpenMM platform used for energy calculation [CPU, CUDA, OpenCL] |
 | ommpre                 | Command prefix for OpenMM script call |
-| ommsuff                | command suffix for OpenMM script call |
+| ommsuff                | Command suffix for OpenMM script call. Usefull to pass CHARMM parameter files "-pf par1 par2 ..."  |
 | remdpressuregen        |  1=enabled; 0=disabled Enable the generation of temperature dependent counter pressures to the vapor pressure (NPT). If enabled, langevinpistontarget is controlled dynamically.|
 | num_runs               |  Number of exchange cycles to perform. |
 | min_runs               |  Number of minimization runs before sampling starts. |
@@ -205,7 +205,7 @@ The average temperature change per exchange (dT/X) must be adjusted to below `30
 
     ./tools/exmat.tcl
     
-The final line `AVG` line under `-= RANDOM WALK SPEED =-` should be below the threshold value. The value will usually start higher and drop over the course of first 50 runs. If the value does not drop enough, reduce the **max_temp** in `template.sh`. Alternatively, increase the number of replicas, however in this case, you need to start the simulation from scratch again. Therefore, remove the old output and configurations files:
+The final `AVG` line under `-= RANDOM WALK SPEED =-` should be below the threshold value. The value will usually start higher and drop over the course of first 50 runs. If the value does not drop enough, reduce the **max_temp** in `template.sh`. Alternatively, increase the number of replicas, however in this case, you need to start the simulation from scratch again. Therefore, remove the old output and configurations files:
 
     rm -r output
     rm job*.conf
