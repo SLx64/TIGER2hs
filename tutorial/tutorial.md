@@ -1,4 +1,4 @@
-## TIGER2hs<sup>PE</sub> application on your own system
+## TIGER2hs<sup>PE</sup> application on your own system
 
 Example systems for (AAQAA)3, HP7 and TrpCage are availabe. Additional practical information to run other molecular systems is the scope of this small tutorial. A minor working experience with NAMD and VMD should be present and also knowledge on building systems and topologies. All instruction were derived under a Linux environment.
 
