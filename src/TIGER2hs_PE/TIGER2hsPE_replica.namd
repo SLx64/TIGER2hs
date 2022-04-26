@@ -1,11 +1,10 @@
 # Supplementary information:
 #
-# Article:     Replica Based Protein Structure Sampling Methods III: 
-#              Parameter Sensitivity, Reproducibility and Efficacy of TIGER2hsPE
+# Article:     Fundamental redesign of the TIGER2hs kernel to address severe parameter sensitivity
 # Authors:     Lukas Schulig, Norman Geist, Mihaela Delcea, Andreas Link, Martin Kulke
 # Institution: Institute of Pharmacy, University of Greifswald, Friedrich-Ludwig-Jahn-Str. 17, 17489 Greifswald
 #              Institute of Biochemistry, University of Greifswald, Felix-Hausdorff-Straße 4, 17487 Greifswald, Germany
-# Journal:     Journal of Chemical Theory and Computation
+# Journal:     Journal of Chemical Information and Modelling
 #
 # -- TIGER2hsPE-PE (pair exchange version)--
 #
