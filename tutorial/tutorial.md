@@ -218,7 +218,7 @@ The temporary PDB snapshots of each replica that are created in the output folde
 
 The PDB snapshots that passed the shellsearch can be visualized by the same way to check whether everything works as expected:
 
-    vmd $(for item in $(ls output/*gb*coor); do echo "-pdb $item"; done)
+    vmd $(for item in $(ls output/*impl*coor); do echo "-pdb $item"; done)
 
 ### Merging the baseline ensemble
 
