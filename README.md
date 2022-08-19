@@ -46,6 +46,7 @@ We are currently preparing the manuscript for the new updates.
 
 ## Applications
 
+* [Identification of a HTT-specific binding motif in DNAJB1 essential for suppression and disaggregation of HTT] (http://dx.doi.org/10.1038/s41467-022-32370-5)
 * [A Hypothesized Mechanism for Chronic Pancreatitis Caused by the N34S Mutation of Serine Protease Inhibitor Kazal-Type 1 Based on Conformational Studies](https://doi.org/10.2147/JIR.S304787)
 * [Nuclear import of BCL11B is mediated by a classical nuclear localization signal and not the Krüppel-like zinc fingers](https://doi.org/10.1242/jcs.258655)
 * [Birefringent Silk Fibroin Hydrogel Constructed via Binary Solvent-Exchange-Induced Self-Assembly](https://doi.org/10.1021/acs.biomac.1c00065)
