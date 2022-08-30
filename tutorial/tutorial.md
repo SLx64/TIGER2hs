@@ -164,7 +164,7 @@ Now it is time to configure the respective selections for **tigersolvent** and *
 Answer the respective questions and enter the resulting selections to `template.sh`
 
     Input) Give solute  selection (mol=top)? (e.g. protein  )
-    protein
+    not water and not resname SOD CLA
     Input) Give solvent selection (mol=top)? (e.g. water    )
     water
     Input) Ignore for shellsearch (mol=top)? (e.g. a surface)
@@ -187,7 +187,7 @@ Now start the sampling. You need at least one core per replica (s. **-n** in `RU
     
 While the simulation is running, the exchange attempts are logged in `output/job0.out`. The invividual output of each replica is found under each subdirectory `output/*` The script `remd/get_sampling.tcl` is used to get e.g. statistics on the simulation time:
 
-    ./remd/get_sampling_tiger2hs.tcl <timestep>
+    ./remd/get_sampling.tcl <timestep>
 
 ### Tune the quenching phase
 
