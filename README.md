@@ -1,14 +1,15 @@
-# TIGER2hs
-TIGER2 hybrid solvent replica exchange implementations for NAMD
+# Welcome to the official TIGER2h(s) repository
+
+Please find here the latest TIGER2h and TIGER2hs implementations for hybrid solvent replica exchange simulations with NAMD. We will also add here any news on new projects and applications for our methods. TIGER2hs(s) is a optimized REMD derivative allowing enhanced sampling MD simulations to sample protein folding, protein-protein interactions, protein stucture refinements and protein conformational dynamics.
 
 ## Usage
 
 Setup a NAMD simulation with TIGER2hs<sup>PE</sup> for one of the example system (AAQAA, HP7, TrpCage):
 
     #copy files
-    cp -r <TIGER2 Repository Path>/systems/<system> simulation & cd simulation
-    cp -r <TIGER2 Repository Path>/src/TIGER2hs_PE remd
-    cp -r <TIGER2 Repository Path>/tools .
+    cp -r <Repository Path>/systems/<system> simulation & cd simulation
+    cp -r <Repository Path>/src/TIGER2hs_PE remd
+    cp -r <Repository Path>/tools .
     cp remd/template.sh simulation.sh
     
 Edit the `simulation.sh` and add values according to system's README. Then run the simulation:
