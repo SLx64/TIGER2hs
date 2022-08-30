@@ -201,7 +201,7 @@ The characteristic heating, sampling and cooling pattern is accessible. By zoomi
 
 ### Tuning dT/X
 
-The average temperature change per exchange (dT/X) must be adjusted to below `30K` to obtain accurate results. Use `tools/exmat.tcl` to get statistics on the exchange behavior of the replicas and their distribution across the temperature levels:
+The average temperature change per exchange (dT/X) must be adjusted to around `20K` to obtain accurate results. Use `tools/exmat.tcl` to get statistics on the exchange behavior of the replicas and their distribution across the temperature levels:
 
     ./tools/exmat.tcl
     
