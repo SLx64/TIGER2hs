@@ -9,6 +9,8 @@ Our latest TIGER2hs implementation relies on OpenMM and MDAnalysis for the hybri
     conda create -n t2hs_openmm python=3.7
     conda activate t2hs_openmm
     conda install -c conda-forge openmm mdanalysis
+
+    (Refer to https://anaconda.org/conda-forge/mdanalysis in case of issues with the installation of Mdanalsysis)
     
 To run TIGER2hs, activate your conda environment from the jobscript (e.g. `template.sh`)
 
@@ -43,7 +45,7 @@ with the settings enabling CHARMM:
     [...]
     1-4scaling 1
     
-Also the OpenMM script `tigeromm` is changed from `remd/omm_impl_spe.py` to `remd/omm_impl_spe_charmm.py`.
+Also the OpenMM script `tigeromm` is changed from `remd/omm_impl_spe.py` to `remd/omm_impl_spe_charmm.py`. List your CHARMM parameter files via `ommsuff` (e.g. `-pf par1 par2 par2 ...`)
 
 ### Preparing and running a TIGER2hs sampling simulation for a solute of own interest.
 --- TIGER2hs configuration options (remd.conf)
