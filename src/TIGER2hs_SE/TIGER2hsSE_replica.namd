@@ -6,7 +6,7 @@
 #              Institute of Biochemistry, University of Greifswald, Felix-Hausdorff-Straße 4, 17487 Greifswald, Germany
 # Journal:     Journal of Chemical Information and Modelling
 #
-# -- TIGER2hs-SR (single exchange version)--
+# -- TIGER2hs-SE (single exchange version)--
 #
 # Implementation of the hybrid solvent TIGER2hs with OpenMM interface
 # for the NAMD - NAnoscale Molecular Dynamics program[1]. The implementation is majorly the original REMD script
@@ -741,9 +741,10 @@ while {$i_run < $num_runs} {
     
     replicaBarrier
     
-    set xscfile "''"
+    set xscfile ""
     if {$tigerimplpbc} {
         set xscfile [format "$output_root.offer.$replica_id.xsc" ""]
+        set xscfile "-b $xscfile"
     }
     
     #run OpenMM
@@ -753,7 +754,7 @@ while {$i_run < $num_runs} {
         eval exec $ommpre $tigeromm $ommsuff -t $tigerimpltop \
                 -c [format "$output_root.impl.$replica_id.coor"   ""] \
                 -o [format "$output_root.impl.$replica_id.mdout"  ""] \
-                -b $xscfile -gb $tigerimplgb -sc $tigerimplsaltcon \
+                   $xscfile -gb $tigerimplgb -sc $tigerimplsaltcon \
                 -p $tigerimplplatform
     } err
     puts $err
