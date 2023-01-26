@@ -496,46 +496,49 @@ proc filterPDB {inpdb outpdb solutesel solventsel ignoresel dspace boxvec maxsol
     array set solvent_atoms [wrap [array get solvent_atoms] $csolvent $boxvec]
     #---------------------------------------------------------------------------------------------------------------
     
-    #perform domain decomposition ----------------------------------------------------------------------------------
-    puts "Info: TIGER2hsPE - DOMAIN DECOMPOSITION AND NEIGHBOR LIST SETUP SPACING=$dspace..."
-    array set solute_domains  [decompose [array get solute_atoms ] $csolute  $dspace $boxvec 1]
-    array set solvent_domains [decompose [array get solvent_atoms] $csolvent $dspace $boxvec 0]
-    #---------------------------------------------------------------------------------------------------------------
-    
-    #perform nearest neighbor search based on domains --------------------------------------------------------------
-    puts "Info: TIGER2hsPE - ENTERING FAST NEAREST NEIGHBOR SEARCH..."
-    set exhaust [expr $csolute * $csolvent]
-    set pairs   0
-    array set dists {}
-    #loop solute domains
-    for {set ix 0} {$ix <= $solute_domains(x.max)} {incr ix} {
-        for {set iy 0} {$iy <= $solute_domains(y.max)} {incr iy} {
-            for {set iz 0} {$iz <= $solute_domains(z.max)} {incr iz} {
-                #domain exists and not empty?
-                if {[info exists solute_domains($ix.$iy.$iz)] && $solute_domains($ix.$iy.$iz.natom) > 0} {
-                    #loop possible neighbors from solvent
-                    foreach neighbor $solute_domains($ix.$iy.$iz.neighbors) {
-                        #domain exists and not empty?
-                        if {[info exists solvent_domains($neighbor)] && $solvent_domains($neighbor.natom) > 0} {
-                            #perform all-atom measures on occupied neighboring domain
-                            foreach item1 $solute_domains($ix.$iy.$iz) {
-                                set atom1 $solute_atoms($item1)
-                                set x1 [lindex $atom1 3]
-                                set y1 [lindex $atom1 4]
-                                set z1 [lindex $atom1 5]
-                                foreach item2 $solvent_domains($neighbor) {
-                                    set atom2 $solvent_atoms($item2)
-                                    set resid [lindex $atom2 2]
-                                    set x2    [lindex $atom2 3]
-                                    set y2    [lindex $atom2 4]
-                                    set z2    [lindex $atom2 5]
-                                    #shorter periodic distance
-                                    set dx  [expr {pmodulo($x1-$x2+($boxx/2.),$boxx) - ($boxx/2.)}]
-                                    set dy  [expr {pmodulo($y1-$y2+($boxy/2.),$boxy) - ($boxy/2.)}]
-                                    set dz  [expr {pmodulo($z1-$z2+($boxz/2.),$boxz) - ($boxz/2.)}]
-                                    set dsq [expr {$dx*$dx + $dy*$dy + $dz*$dz}]
-                                    lappend dists($dsq) $resid
-                                    incr pairs
+    #shellsearch needed?
+    if {$maxsol > 0} {
+        #perform domain decomposition ----------------------------------------------------------------------------------
+        puts "Info: TIGER2hsPE - DOMAIN DECOMPOSITION AND NEIGHBOR LIST SETUP SPACING=$dspace..."
+        array set solute_domains  [decompose [array get solute_atoms ] $csolute  $dspace $boxvec 1]
+        array set solvent_domains [decompose [array get solvent_atoms] $csolvent $dspace $boxvec 0]
+        #---------------------------------------------------------------------------------------------------------------
+        
+        #perform nearest neighbor search based on domains --------------------------------------------------------------
+        puts "Info: TIGER2hsPE - ENTERING FAST NEAREST NEIGHBOR SEARCH..."
+        set exhaust [expr $csolute * $csolvent]
+        set pairs   0
+        array set dists {}
+        #loop solute domains
+        for {set ix 0} {$ix <= $solute_domains(x.max)} {incr ix} {
+            for {set iy 0} {$iy <= $solute_domains(y.max)} {incr iy} {
+                for {set iz 0} {$iz <= $solute_domains(z.max)} {incr iz} {
+                    #domain exists and not empty?
+                    if {[info exists solute_domains($ix.$iy.$iz)] && $solute_domains($ix.$iy.$iz.natom) > 0} {
+                        #loop possible neighbors from solvent
+                        foreach neighbor $solute_domains($ix.$iy.$iz.neighbors) {
+                            #domain exists and not empty?
+                            if {[info exists solvent_domains($neighbor)] && $solvent_domains($neighbor.natom) > 0} {
+                                #perform all-atom measures on occupied neighboring domain
+                                foreach item1 $solute_domains($ix.$iy.$iz) {
+                                    set atom1 $solute_atoms($item1)
+                                    set x1 [lindex $atom1 3]
+                                    set y1 [lindex $atom1 4]
+                                    set z1 [lindex $atom1 5]
+                                    foreach item2 $solvent_domains($neighbor) {
+                                        set atom2 $solvent_atoms($item2)
+                                        set resid [lindex $atom2 2]
+                                        set x2    [lindex $atom2 3]
+                                        set y2    [lindex $atom2 4]
+                                        set z2    [lindex $atom2 5]
+                                        #shorter periodic distance
+                                        set dx  [expr {pmodulo($x1-$x2+($boxx/2.),$boxx) - ($boxx/2.)}]
+                                        set dy  [expr {pmodulo($y1-$y2+($boxy/2.),$boxy) - ($boxy/2.)}]
+                                        set dz  [expr {pmodulo($z1-$z2+($boxz/2.),$boxz) - ($boxz/2.)}]
+                                        set dsq [expr {$dx*$dx + $dy*$dy + $dz*$dz}]
+                                        lappend dists($dsq) $resid
+                                        incr pairs
+                                    }
                                 }
                             }
                         }
@@ -543,45 +546,48 @@ proc filterPDB {inpdb outpdb solutesel solventsel ignoresel dspace boxvec maxsol
                 }
             }
         }
-    }
-    puts "Info: TIGER2hsPE - COMPLETED SHELL SEARCH - DD COMPUTED ONLY $pairs PAIRS OUT OF $exhaust"
-    #-----------------------------------------------------------------------------------------------------------------
-    
-    #identify solvent shell by distance ----------------------------------------------------------------------------
-    set sorted [lsort -real -increasing [array names dists]]
-    array set shell  {}
-    array set scount {}
-    foreach item $sorted {
-        foreach resid $dists($item) {
-            if {![info exists shell($resid)] && [llength [array names shell]] < $maxsol} {
-                set shell($resid) 1
-                puts "Info: TIGER2hsPE - ASSIGNED $resid TO SHELL WITH DISTANCE [expr sqrt($item)]"
+        puts "Info: TIGER2hsPE - COMPLETED SHELL SEARCH - DD COMPUTED ONLY $pairs PAIRS OUT OF $exhaust"
+        #-----------------------------------------------------------------------------------------------------------------
+        
+        #identify solvent shell by distance ----------------------------------------------------------------------------
+        set sorted [lsort -real -increasing [array names dists]]
+        array set shell  {}
+        array set scount {}
+        foreach item $sorted {
+            foreach resid $dists($item) {
+                if {![info exists shell($resid)] && [llength [array names shell]] < $maxsol} {
+                    set shell($resid) 1
+                    puts "Info: TIGER2hsPE - ASSIGNED $resid TO SHELL WITH DISTANCE [expr sqrt($item)]"
+                }
+                set scount($resid) 1
             }
-            set scount($resid) 1
         }
-    }
-    set sc [llength [array names scount]]
-    puts "Info: TIGER2hsPE - TOTAL NUMBER OF SHELL CANDIDATES $sc"
-    
-    #fast neighbor search tweaks
-    if {$sc < $maxsol} {
-        puts stderr "Error: TIGER2hsPE - NEAREST NEIGHBOR SEARCH RETURNED LESS SOLVENTS THAN REQUESTED $sc < $maxsol"
-        puts stderr "Error: TIGER2hsPE - INCREASE dpace"
-        exit 1
-    } elseif {[expr ($sc > ($maxsol * 1.66))]} {
-        puts "Warn: TIGER2hsPE - NEAREST NEIGHBOR SEARCH RETURNED MUCH MORE SOLVENTS THAN REQUESTED"
-        puts "Warn: TIGER2hsPE - DECREASING dpace MIGHT IMPROVE PERFORMANCE"
-    }
-    #---------------------------------------------------------------------------------------------------------------
-    
-    #join solute2 with selected solvents and write pdb --------------------------------------------------------------
-    set ac $csolute2
-    for {set i 1} {$i <= $csolvent} {incr i} {
-        set resid [lindex $solvent_atoms_bak($i) 2]
-        if {[info exists shell($resid)]} {
-            incr ac
-            set solute_atoms2_bak($ac) $solvent_atoms_bak($i)
+        set sc [llength [array names scount]]
+        puts "Info: TIGER2hsPE - TOTAL NUMBER OF SHELL CANDIDATES $sc"
+        
+        #fast neighbor search tweaks
+        if {$sc < $maxsol} {
+            puts stderr "Error: TIGER2hsPE - NEAREST NEIGHBOR SEARCH RETURNED LESS SOLVENTS THAN REQUESTED $sc < $maxsol"
+            puts stderr "Error: TIGER2hsPE - INCREASE dpace"
+            exit 1
+        } elseif {[expr ($sc > ($maxsol * 1.66))]} {
+            puts "Warn: TIGER2hsPE - NEAREST NEIGHBOR SEARCH RETURNED MUCH MORE SOLVENTS THAN REQUESTED"
+            puts "Warn: TIGER2hsPE - DECREASING dpace MIGHT IMPROVE PERFORMANCE"
         }
+        #---------------------------------------------------------------------------------------------------------------
+        
+        #join solute2 with selected solvents and write pdb --------------------------------------------------------------
+        set ac $csolute2
+        for {set i 1} {$i <= $csolvent} {incr i} {
+            set resid [lindex $solvent_atoms_bak($i) 2]
+            if {[info exists shell($resid)]} {
+                incr ac
+                set solute_atoms2_bak($ac) $solvent_atoms_bak($i)
+            }
+        }
+    } else {
+        set ac $csolute2
+        puts "Info: TIGER2hsPE - SKIPPED SHELL SEARCH ($maxsol SOLVENTS)"
     }
     
     writepdb [array get solute_atoms2_bak] $ac $outpdb
