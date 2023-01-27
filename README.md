@@ -21,7 +21,7 @@ You can monitor the sampling and exchange process by `get_samping.tcl` and `exma
     ./tools/exmat.tcl
     ./remd/get_sampling.tcl <timestep>
     
-### Further information see: [tutorial/tutorial.md](tutorial/tutorial.md)
+### Further information see: [Tutorial](tutorial)
 
 ## Required software
 
