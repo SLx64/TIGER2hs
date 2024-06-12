@@ -1,6 +1,6 @@
-# Welcome to the official TIGER2h(s)~PE repository
+# Welcome to the official TIGER2h(s)<sup>PE</sub> repository
 
-Please find here the latest TIGER2h~PE and TIGER2hs~PE implementations for hybrid solvent replica exchange simulations with NAMD. We will also add here any news on new projects and applications for our methods. TIGER2h(s)~PE is a optimized REMD derivative allowing enhanced sampling MD simulations to sample protein folding, protein-protein interactions, protein stucture refinements and protein conformational dynamics.
+Please find here the latest TIGER2h<sup>PE</sub> and TIGER2hs<sup>PE</sub> implementations for hybrid solvent replica exchange simulations with NAMD. We will also add here any news on new projects and applications for our methods. TIGER2h(s)<sup>PE</sub> is a optimized REMD derivative allowing enhanced sampling MD simulations to sample protein folding, protein-protein interactions, protein stucture refinements and protein conformational dynamics.
 
 ## Usage
 
