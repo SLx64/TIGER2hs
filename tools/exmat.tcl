@@ -81,7 +81,7 @@ for {set i 1} {$i < $runs} {incr i} {
         set tnew $r2t([concat [expr $i-1] " " $rnew])
         
         #register temperature distribution across physical replicas
-        incr locmat([concat $rold $told])
+        incr locmat([concat $told $rold])
         
         if {$rold != $rnew} {
             #exchange detected
