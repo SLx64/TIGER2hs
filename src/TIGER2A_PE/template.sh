@@ -1,5 +1,10 @@
 #!/bin/bash -l
 # AUTO RESTARTING TEMPLATE
+
+# 加载 GPU 配置
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../gpu.conf"
+
 #################################################################
 jobname="<INPUT>"               #jobname
 numreplicas="8"					#number of replicas

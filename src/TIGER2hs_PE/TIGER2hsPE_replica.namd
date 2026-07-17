@@ -762,6 +762,13 @@ while {$i_run < $num_runs} {
     #run OpenMM
     timer_start "OpenMM"
     puts "Info: TIGER2hsPE - WAITING FOR ENERGY RUN $i_run"
+
+    # GPU 调度：从 GPU_LIST 为每个 replica 分配设备
+    set gpu_list_split [split $tigerimplgpulist ","]
+    set num_gpus [llength $gpu_list_split]
+    set current_device [lindex $gpu_list_split [expr {$replica_id % $num_gpus}]]
+    set ommpre "CUDA_VISIBLE_DEVICES=$current_device"
+
     catch {
         eval exec $ommpre $tigeromm $ommsuff -t $tigerimpltop \
                 -c [format "$output_root.impl.$replica_id.coor"   ""] \

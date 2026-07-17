@@ -1,5 +1,10 @@
 #!/bin/bash -l
 # AUTO RESTARTING TEMPLATE
+
+# 加载 GPU 配置
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../gpu.conf"
+
 #################################################################
 jobname="<INPUT>"						#jobname
 numreplicas="8"							#number of replicas
@@ -132,6 +137,7 @@ set tigerimplsaltcon ${tigerimplsaltcon}
 set tigerimplpbc ${tigerimplpbc}
 set tigerimpltop ${tigerimpltop}
 set tigerimplplatform ${tigerimplplatform}
+set tigerimplgpulist "${GPU_LIST}"
 set ommpre "${ommpre}"
 set ommsuff "${ommsuff}"
 set num_runs ${numruns}
